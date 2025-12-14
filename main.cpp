@@ -7,6 +7,7 @@
 #include <thread>
 #include <filesystem>
 #include <iomanip>
+#include "locker.h"
 using namespace std;
 namespace fs = filesystem;
 
@@ -17,7 +18,7 @@ bool create_directory(const string& path) {
         return fs::is_directory(path);
     } 
     catch (const fs::filesystem_error& e) {
-        std::cerr << "Error creating directory '" << path << "': " << e.what() << '\n';
+        cerr << "Error creating directory '" << path << "': " << e.what() << '\n';
         return false;
     }
 }
@@ -25,21 +26,21 @@ struct Particle {
     double x, y;
     double vx, vy;
     double ax, ay;
+    double theta_avg;
     double x_new,y_new;
     double vx_new,vy_new;
     vector <int> neighbours;
 };
 
-class Simulation_ABP {
+class Simulation {
 private:
     const int N;              // Number of particles
     const double Lx;          // Box size
     const double Ly;          //  Box size
     const double dt;          // Timestep
     const double v0;          // Magnitude of velocity
-    const double Temp;       // Temperture 
-    const double D;          // Diffusion coefficient
-    const double gamma;      // Friction coefficient
+    const double Dr;          // Rotational diffusion coefficient
+    const double Dt;          // Translational diffusion coefficient
     const double rc;          // Cutoff radius
     const double sigma;       // Particle radius
     const double k;           // Repulsion strength
@@ -47,17 +48,19 @@ private:
     vector<int> times;        // Time points recorded
     vector<double> order;     // Order parameter data
     vector<Particle> particles;
-    mt19937 gen;
-    uniform_real_distribution<double> rng_uniform_symm,rng_uniform_one;
-    normal_distribution<double> rng_normal;    string folder_path;
+    mt19937 gen; 
+    uniform_real_distribution<double> rng_uniform_symm{-1.0, 1.0};
+    uniform_real_distribution<double> rng_uniform_one{0, 1};
+    normal_distribution<double> rng_normal_unity{0.0, 1.0};
 
+    string folder_path;
 public:
-    Simulation_ABP(int num_particles, double Temp_strength,double D_input,double gamma_input,double box_size_x,
-               double box_size_y,int sigma_input,double k_input,double velo_mag,double timestep,
+    Simulation(int num_particles,double Dr_input,double Dt_input,double box_size_x,
+               double box_size_y,double sigma_input,double k_input,double velo_mag,double timestep,
                string folderpath,int trial_input,int seed)
-             : N(num_particles), Lx(box_size_x),Ly(box_size_y), dt(timestep), Temp(Temp_strength),
-               sigma(sigma_input), k(k_input),rc(3*sigma_input), rng_uniform_symm(-1.0, 1.0),rng_uniform_one(0, 1),
-               gen(seed),rng_normal(0,1),v0(velo_mag),folder_path(folderpath),trial(trial_input),gamma(gamma_input),D(D_input){
+             : N(num_particles), Dr(Dr_input),Lx(box_size_x),Ly(box_size_y), dt(timestep), Dt(Dt_input),
+               sigma(sigma_input), k(k_input),rc(3*sigma_input),gen(seed),
+               v0(velo_mag),folder_path(folderpath),trial(trial_input){
 
         particles.resize(N);
         initialize_particles();
@@ -70,23 +73,18 @@ public:
         order_file.close();
 
     }
-
     vector<double> get_order_data(){
         return order;}
     vector<int> get_time_data(){
         return times;}
-    void update_neigbours(){
-        
+    void update_neigbours(){       
         for(Particle &p:particles){
-            p.neighbours.clear();
-            
+            p.neighbours.clear();            
             for(int i=0;i<N;i++){
                 double r=rij(p,particles[i]);
-                
                 if(r<=2*rc && r>1e-5) {p.neighbours.push_back(i);}
-                
             }
-        
+            //cout<<"no. neighbors "<<rc<<" "<<p.neighbours.size()<<"\n";
         }
     }
     void initialize_particles_old() {
@@ -113,11 +111,10 @@ public:
                 i++;                
             } 
         }    
-        update_neigbours();
+        //update_neigbours();
         for(int t=0;t<100;t++){velocity_update();position_update();EndTimeStep();}
-        update_neigbours();
-    }          
-
+        //update_neigbours();
+    }                  
     void initialize_particles() {
         gen.seed(12345 + 10 * trial);
         double rho = N/(Lx*Ly);
@@ -143,13 +140,13 @@ public:
                 particles[i].ax = 0;
                 particles[i].ay = 0;
                 
-                
+                particles[i].theta_avg = 0;
                 i++;                
             } 
         }
-        update_neigbours();
+        //update_neigbours();
         for(int t=0;t<1500;t++){velocity_update();position_update();EndTimeStep();}
-        update_neigbours();
+        //update_neigbours();
     }          
     double dot_product(double theta,double dx,double dy,double rij){
         return ( (cos(theta) * (dx)) + (sin(theta) * (dy)) )/(rij);
@@ -195,7 +192,7 @@ public:
         return r;
     }
     
-    void compute_forces() {
+    void compute_forces_old() {
         for (Particle &p : particles) {
             p.ax = 0;
             p.ay  = 0;
@@ -224,13 +221,41 @@ public:
             }
         }
     }   
-
+    void compute_forces() {
+        for (Particle &p : particles) {
+            p.ax = 0;
+            p.ay  = 0;
+            }
+        
+        for (int i = 0; i < particles.size(); i++) {
+            for (int j=i+1;j<particles.size();j++) {
+                //if(j<=i)continue; // to avoid double counting
+                double dx = particles[j].x - particles[i].x;
+                double dy = particles[j].y - particles[i].y;
+                dx=minimum_image(dx,Lx);
+                dy=minimum_image(dy,Ly);
+                double r = hypot(dx,dy);     
+            
+                double f = inter_particle_repulsive_force(r);
+                double fx = f * (-dx / r);
+                double fy = f * (-dy / r);
+                
+                particles[i].ax += fx;
+                particles[i].ay += fy;
+                
+                particles[j].ax -= fx;
+                particles[j].ay -= fy;
+                
+                
+            }
+        }
+    }   
     void velocity_update(){
         compute_forces();
-        for (Particle & p : particles) {   
-            double theta=sqrt(2*D)*rng_normal(gen); 
-            p.vx_new = p.ax/gamma + v0*cos(theta);
-            p.vy_new = p.ay/gamma + v0*sin(theta); 
+        for (Particle & p : particles) {    
+            double theta = sqrt(2*Dr/dt) * rng_normal_unity(gen);
+            p.vx_new = p.ax + v0*cos(theta) + sqrt(2*Dt/dt)*rng_normal_unity(gen);
+            p.vy_new = p.ay + v0*sin(theta) + sqrt(2*Dt/dt)*rng_normal_unity(gen); 
         }
     }
     void position_update(){
@@ -277,25 +302,27 @@ public:
         
         file.close();
     }   
+
     void start_run(int tmax,int trialstart,vector<bool>time_record) {
         ofstream f(folder_path+"parameters.csv");
-        string head="N,Lx,Ly,v0,dt,eta,maxiter,trial\n";
+        string head="N,Lx,Ly,Dr,v0,dt,Dt,maxiter,trial\n";
         f<< head;
-        f<<N<<","<<Lx<<","<<Ly<<","<<v0<<","<<dt<<","<<Temp<<","<<tmax<<","<<trial; 
+        f<<N<<","<<Lx<<","<<Ly<<","<<Dr<<","<<v0<<","<<dt<<","<<Dt<<","<<tmax<<","<<trial; 
         f.close();
+        time_t timestarted=time(NULL);
         int time_counter=0;
         for (int t = 0; t < tmax; t++) { 
             compute_forces();
             integrate();
-            if(t%250==0)update_neigbours();
+            //if(t%250==0)update_neigbours();
             if (time_record[t]){
                 order.push_back(velocity_order_parameter());    
                 save_snapshot(t,trial);
                 times.push_back(t);
                 } 
-            if (t % 500 == 0) cout  << t<<">>" << flush;
+            if (t % 500 == 0){ print_progress(static_cast<float> (t)/static_cast<float> (tmax),static_cast<float>(timestarted));cout<<static_cast<float> (t)/static_cast<float> (tmax)<<"\n";}
         } 
-        cout<<tmax<<"\n"; 
+        print_progress(1.0,static_cast<float>(timestarted));
         save_order_data();
         cout << "\nSimulation complete. Recorded " << times.size() << " snapshots." << endl;
     }
@@ -330,21 +357,20 @@ void save_order(vector<vector<double>>orderpara,vector<int>times,int trialstart,
     order_file.close();
     }
 
-int main() {
-    int N = 100;             // Number of particles
-    double Lx = 20.0;          // Box size
-    double Ly = 20.0;          // Box size
-    double v0=50.0;            // Magnitude of velocity
-    double D=0.1;            // Diffusion coefficient
-    double gamma=1.0;        // Friction coefficient
-    double dt = 1e-4;        // Timestep
-    double Temp = 2.0;         // Temp 
-    int tmax = 20000;        // Maximum time
-    int numberoftrials=1;    // Number of trials
-    int trialstart=0;        // Starting trial number 
-    double sigma=1.0;          // particle radius
-    double k=1;           // repulsion strength
-    int seed=12345;          // random seed
+int main() { 
+    int N = 500;              // Number of particles
+    double Lx = 25;         // Box size
+    double Ly = 25;         // Box size
+    double v0=1.0e0;          // Magnitude of velocity
+    double dt = 1.0e-3;       // Timestep
+    double Dr=1.0e-1;        // Rotational diffusion coefficient
+    double Dt=1.0e0;         // Translational diffusion coefficient
+    int tmax = 2.0e4;         // Maximum time
+    int numberoftrials=1;     // Number of trials
+    int trialstart=0;         // Starting trial number 
+    double sigma=0.5;         // particle radius
+    double k=80.0;            // repulsion strength
+    int seed=12345;           // random seed
     time_t trial_time,start_time=time(NULL) , finish_time;
     vector<bool> time_record=calculate_time_to_record(tmax); 
     vector <vector<double>> order_data(numberoftrials-trialstart);
@@ -355,9 +381,9 @@ int main() {
     for(int trial=trialstart;trial<numberoftrials;trial++){
         create_directory(folder_path+"config_data/trial_"+ to_string(trial)+"/");
         trial_time=time(NULL);
-        cout<<"\n"<<"Trial number : "<<trial<< " Out of "<<numberoftrials<<fixed<<setprecision(2)<<" | D_r : "<<D<<" | Packing Fraction : "<<((N*M_PI*(sigma/2)*(sigma/2))/(Lx*Ly))<<" | N = "<<N<<" | "<<endl ;
+        cout<<"\n"<<"Trial number "<<trial<< " Out of "<<numberoftrials<<fixed<<setprecision(2)<<" || Packing Fraction : "<<((M_PI*N*(sigma)*(sigma))/(Lx*Ly))<<" | N = "<<N<<" || "<<endl ;
         
-        Simulation_ABP sim(N,Temp,D,gamma,Lx,Ly,sigma,k,v0,dt,folder_path,trial,seed);
+        Simulation sim(N,Dr,Dt,Lx,Ly,sigma,k,v0,dt,folder_path,trial,seed);
         sim.start_run(tmax,trialstart,time_record);
         
         cout<<"Time to calculate trial = "  <<time(NULL)-trial_time<<" seconds ";  
