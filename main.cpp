@@ -26,7 +26,7 @@ struct Particle {
     double x, y;
     double vx, vy;
     double ax, ay;
-    double theta_avg;
+    double theta_new,theta;
     double x_new,y_new;
     double vx_new,vy_new;
     vector <int> neighbours;
@@ -111,13 +111,13 @@ public:
                 i++;                
             } 
         }    
-        //update_neigbours();
+        update_neigbours();
         for(int t=0;t<100;t++){velocity_update();position_update();EndTimeStep();}
-        //update_neigbours();
+        update_neigbours();
     }                  
     void initialize_particles() {
         gen.seed(12345 + 10 * trial);
-        double rho = N/(Lx*Ly);
+        double rho = N*sigma*sigma/(Lx*Ly);
         if(rho>=1){cout<<"Particles Intialize Failure ";}
         int grid_size = static_cast<int>(ceil(sqrt(N)));
         double spacing_x = Lx / grid_size;
@@ -132,21 +132,22 @@ public:
                 particles[i].y_new = particles[i].y;
                 
                 double theta=M_PI*rng_uniform_symm(gen);
-                particles[i].vx = v0*cos(theta);
-                particles[i].vy = v0*sin(theta);
-                particles[i].vx_new = v0*cos(theta);
-                particles[i].vy_new = v0*sin(theta);
+                particles[i].vx = 0;
+                particles[i].vy = 0;
+                particles[i].vx_new = 0;
+                particles[i].vy_new = 0;
                 
                 particles[i].ax = 0;
                 particles[i].ay = 0;
                 
-                particles[i].theta_avg = 0;
+                particles[i].theta = theta;
+                particles[i].theta_new = theta;
                 i++;                
             } 
         }
-        //update_neigbours();
+        update_neigbours();
         for(int t=0;t<1500;t++){velocity_update();position_update();EndTimeStep();}
-        //update_neigbours();
+        update_neigbours();
     }          
     double dot_product(double theta,double dx,double dy,double rij){
         return ( (cos(theta) * (dx)) + (sin(theta) * (dy)) )/(rij);
@@ -179,7 +180,7 @@ public:
         return 24.0 * (sr6 - 2.0 * sr12 ) / r;
     }
     double inter_particle_repulsive_force(double r) {
-        if (r <= 2*sigma ) return k*(2*sigma-r);
+        if (r <= 2*sigma ) return k*(r-2*sigma);
         else return 0;
     }   
     double rij( Particle& p_i,  Particle& p_j) {
@@ -192,7 +193,7 @@ public:
         return r;
     }
     
-    void compute_forces_old() {
+    void compute_forces() {
         for (Particle &p : particles) {
             p.ax = 0;
             p.ay  = 0;
@@ -221,7 +222,7 @@ public:
             }
         }
     }   
-    void compute_forces() {
+    void compute_forces_old() {
         for (Particle &p : particles) {
             p.ax = 0;
             p.ay  = 0;
@@ -230,8 +231,8 @@ public:
         for (int i = 0; i < particles.size(); i++) {
             for (int j=i+1;j<particles.size();j++) {
                 //if(j<=i)continue; // to avoid double counting
-                double dx = particles[j].x - particles[i].x;
-                double dy = particles[j].y - particles[i].y;
+                double dx = particles[i].x - particles[j].x;
+                double dy = particles[i].y - particles[j].y;
                 dx=minimum_image(dx,Lx);
                 dy=minimum_image(dy,Ly);
                 double r = hypot(dx,dy);     
@@ -253,15 +254,17 @@ public:
     void velocity_update(){
         compute_forces();
         for (Particle & p : particles) {    
-            double theta = sqrt(2*Dr/dt) * rng_normal_unity(gen);
-            p.vx_new = p.ax + v0*cos(theta) + sqrt(2*Dt/dt)*rng_normal_unity(gen);
-            p.vy_new = p.ay + v0*sin(theta) + sqrt(2*Dt/dt)*rng_normal_unity(gen); 
+            p.vx_new = p.ax + v0*cos(p.theta) + sqrt(2*Dt/dt)*rng_normal_unity(gen);
+            p.vy_new = p.ay + v0*sin(p.theta) + sqrt(2*Dt/dt)*rng_normal_unity(gen); 
+           
         }
     }
     void position_update(){
         for (Particle & p : particles) {    
             p.x_new += p.vx * dt ;
-            p.y_new += p.vy * dt ;           
+            p.y_new += p.vy * dt ;      
+            p.theta_new+= sqrt(2*Dr*dt) * rng_normal_unity(gen);
+                 
             pbc_position(p);
         }
     }
@@ -271,7 +274,8 @@ public:
             p.vx = p.vx_new;
             p.vy = p.vy_new;
             p.x = p.x_new;
-            p.y = p.y_new;            
+            p.y = p.y_new;   
+            p.theta = p.theta_new;         
             }         
     } 
     void integrate() {
@@ -309,20 +313,20 @@ public:
         f<< head;
         f<<N<<","<<Lx<<","<<Ly<<","<<Dr<<","<<v0<<","<<dt<<","<<Dt<<","<<tmax<<","<<trial; 
         f.close();
-        time_t timestarted=time(NULL);
+        double timestarted=static_cast <double>(time(NULL));
         int time_counter=0;
         for (int t = 0; t < tmax; t++) { 
             compute_forces();
             integrate();
-            //if(t%250==0)update_neigbours();
+            if(t%250==0)update_neigbours();
             if (time_record[t]){
                 order.push_back(velocity_order_parameter());    
                 save_snapshot(t,trial);
                 times.push_back(t);
                 } 
-            if (t % 500 == 0){ print_progress(static_cast<float> (t)/static_cast<float> (tmax),static_cast<float>(timestarted));cout<<static_cast<float> (t)/static_cast<float> (tmax)<<"\n";}
+            if (t % 500 == 0){ print_progress(static_cast<double>(t)/static_cast<double>(tmax),timestarted);}
         } 
-        print_progress(1.0,static_cast<float>(timestarted));
+        print_progress(1.0,static_cast<double>(timestarted));
         save_order_data();
         cout << "\nSimulation complete. Recorded " << times.size() << " snapshots." << endl;
     }
@@ -358,18 +362,18 @@ void save_order(vector<vector<double>>orderpara,vector<int>times,int trialstart,
     }
 
 int main() { 
-    int N = 500;              // Number of particles
-    double Lx = 25;         // Box size
-    double Ly = 25;         // Box size
+    int N = 1000;              // Number of particles
+    double Lx = 32;         // Box size
+    double Ly = 32;         // Box size
     double v0=1.0e0;          // Magnitude of velocity
     double dt = 1.0e-3;       // Timestep
     double Dr=1.0e-1;        // Rotational diffusion coefficient
     double Dt=1.0e0;         // Translational diffusion coefficient
-    int tmax = 2.0e4;         // Maximum time
+    int tmax = 5.0e4;         // Maximum time
     int numberoftrials=1;     // Number of trials
     int trialstart=0;         // Starting trial number 
     double sigma=0.5;         // particle radius
-    double k=80.0;            // repulsion strength
+    double k=120.0;            // repulsion strength
     int seed=12345;           // random seed
     time_t trial_time,start_time=time(NULL) , finish_time;
     vector<bool> time_record=calculate_time_to_record(tmax); 
