@@ -56,11 +56,12 @@ private:
     string folder_path;
 public:
     Simulation(int num_particles,double Dr_input,double Dt_input,double box_size_x,
-               double box_size_y,double sigma_input,double k_input,double velo_mag,double timestep,
-               string folderpath,int trial_input,int seed)
-             : N(num_particles), Dr(Dr_input),Lx(box_size_x),Ly(box_size_y), dt(timestep), Dt(Dt_input),
-               sigma(sigma_input), k(k_input),rc(3*sigma_input),gen(seed),
-               v0(velo_mag),folder_path(folderpath),trial(trial_input){
+               double box_size_y,double sigma_input,double k_input,double velo_mag,
+               double timestep,string folderpath,int trial_input,int seed)
+               :N(num_particles), Dr(Dr_input),Lx(box_size_x),Ly(box_size_y), 
+               dt(timestep), Dt(Dt_input),sigma(sigma_input), k(k_input),
+               rc(3*sigma_input),gen(seed),v0(velo_mag),folder_path(folderpath),
+               trial(trial_input){
 
         particles.resize(N);
         initialize_particles();
@@ -117,8 +118,8 @@ public:
     }                  
     void initialize_particles() {
         gen.seed(12345 + 10 * trial);
-        double rho = N*sigma*sigma/(Lx*Ly);
-        if(rho>=1){cout<<"Particles Intialize Failure ";}
+        double rho = N*M_PI*sigma*sigma/(Lx*Ly);
+        if(rho>=1){cout<<"Density greater than 1  Packing Fraction = "<<rho<<endl<<flush;abort();}
         int grid_size = static_cast<int>(ceil(sqrt(N)));
         double spacing_x = Lx / grid_size;
         double spacing_y = Ly / grid_size;
@@ -126,8 +127,8 @@ public:
         for(int j=0;j<static_cast<int>(grid_size) &&i<N;j++){
             for(int k=0;k<static_cast<int>(grid_size)&&i<N;k++){
 
-                particles[i].x = (j + 0.5) * spacing_x;
-                particles[i].y = (k + 0.5) * spacing_y;
+                particles[i].x = (j + sigma) * spacing_x;
+                particles[i].y = (k + sigma) * spacing_y;
                 particles[i].x_new = particles[i].x;
                 particles[i].y_new = particles[i].y;
                 
@@ -146,7 +147,7 @@ public:
             } 
         }
         update_neigbours();
-        for(int t=0;t<1500;t++){velocity_update();position_update();EndTimeStep();}
+        //for(int t=0;t<1500;t++){velocity_update();position_update();EndTimeStep();}
         update_neigbours();
     }          
     double dot_product(double theta,double dx,double dy,double rij){
@@ -193,7 +194,7 @@ public:
         return r;
     }
     
-    void compute_forces() {
+    void compute_forces_old() {
         for (Particle &p : particles) {
             p.ax = 0;
             p.ay  = 0;
@@ -222,7 +223,7 @@ public:
             }
         }
     }   
-    void compute_forces_old() {
+    void compute_forces() {
         for (Particle &p : particles) {
             p.ax = 0;
             p.ay  = 0;
@@ -316,7 +317,7 @@ public:
         double timestarted=static_cast <double>(time(NULL));
         int time_counter=0;
         for (int t = 0; t < tmax; t++) { 
-            compute_forces();
+            
             integrate();
             if(t%250==0)update_neigbours();
             if (time_record[t]){
@@ -362,9 +363,9 @@ void save_order(vector<vector<double>>orderpara,vector<int>times,int trialstart,
     }
 
 int main() { 
-    int N = 1000;              // Number of particles
-    double Lx = 32;         // Box size
-    double Ly = 32;         // Box size
+    int N = 500;              // Number of particles
+    double Lx = 16;         // Box size
+    double Ly = 16;         // Box size
     double v0=1.0e0;          // Magnitude of velocity
     double dt = 1.0e-3;       // Timestep
     double Dr=1.0e-1;        // Rotational diffusion coefficient
@@ -392,7 +393,7 @@ int main() {
         
         cout<<"Time to calculate trial = "  <<time(NULL)-trial_time<<" seconds ";  
         
-        order_data[trial]=sim.get_order_data();       
+        order_data[trial-trialstart]=sim.get_order_data();       
         if(trial==numberoftrials-1)times=sim.get_time_data();
     }   
     
